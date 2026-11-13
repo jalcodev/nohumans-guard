@@ -1,0 +1,47 @@
+{
+  "name": "nohumans-guard",
+  "version": "0.1.0",
+  "description": "Check an x402 endpoint against nohumans.directory before your agent signs a payment: blocks endpoints whose latest real purchase did not deliver, that are failing or delisted, or whose 402 names a different payTo or a higher price than the record. One line on an x402 client. Zero dependencies.",
+  "type": "module",
+  "main": "./index.mjs",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.mjs"
+    }
+  },
+  "files": [
+    "index.mjs",
+    "index.d.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test test.mjs"
+  },
+  "keywords": [
+    "x402",
+    "agents",
+    "agent-payments",
+    "usdc",
+    "base",
+    "payment-guard",
+    "pre-payment-check",
+    "paid-apis",
+    "mcp",
+    "nohumans"
+  ],
+  "homepage": "https://nohumans.directory/integrate",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jalcodev/nohumans-guard.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jalcodev/nohumans-guard/issues"
+  }
+}
