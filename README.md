@@ -21,6 +21,20 @@ const fetchWithPay = wrapFetchWithPayment(fetch, client);
 
 A blocked payment makes the paid fetch throw before a signature exists; the message says why and links the record. No key, no account, no dependencies. Node 18 or later.
 
+## Works with
+
+The hook goes on the `x402Client`, so it is the same line whichever official wrapper carries the payment (tested with version 2.31 of each):
+
+| Package | How the client is used |
+|---|---|
+| `@x402/fetch` | `wrapFetchWithPayment(fetch, client)` |
+| `@x402/axios` | `wrapAxiosWithPayment(axios.create(), client)` |
+| `@x402/mcp` | `wrapMCPClientWithPayment(mcpClient, client)`: accepted, but see below |
+
+Agent frameworks (LangChain, the OpenAI Agents SDK, the Vercel AI SDK and others) do not pay by themselves; their tools pay through one of these clients, so the guard goes wherever that client is built.
+
+Not covered in this version: a paid MCP tool call names its resource `mcp://tool/<name>`, which is not a URL the directory can look up, so those payments pass through unchecked (`not_a_url`). Paid HTTP endpoints are covered.
+
 ## What it blocks
 
 The directory's published pay rules, in order; the first that matches decides.
