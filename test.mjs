@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { decide, check, lookupUrl, nohumansGuard, reportOutcome } from "./index.mjs";
+import { decide, check, lookupUrl, nohumansGuard, reportOutcome, failureKind } from "./index.mjs";
 
 const USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 const PAYTO = "0x5b32c973596078a967562ca652761404f19be0e9";
@@ -15,9 +15,34 @@ test("allows a verified, delivered endpoint", () => {
   const d = decide(rec(), req());
   assert.equal(d.action, "allow"); assert.equal(d.rule, "ok"); assert.match(d.record, /\/l\/abc$/);
 });
-test("rule 1: latest purchase failed blocks even when verified", () => {
-  assert.equal(decide(rec({ paid_verification_latest: { delivered: false } }), req()).rule, "latest_purchase_failed");
-  assert.equal(decide(rec({ paid_verification_latest: null, latest_purchase_delivered: false }), req()).rule, "latest_purchase_failed");
+test("rule 1: a failure any buyer would hit blocks even when verified", () => {
+  for (const fr of ["paid_but_status_500", "paid_but_status_503;settlement_junk:x", "paid_but_status_402", "empty_body", "paid_but_error_ECONNRESET", "accepted_no_result"]) {
+    const d = decide(rec({ paid_verification_latest: { delivered: false, failure_reason: fr } }), req());
+    assert.equal(d.action, "block", fr); assert.equal(d.rule, "latest_purchase_failed"); assert.equal(d.failure_kind, "any_buyer");
+  }
+  // the server's failure_kind wins over the local copy
+  assert.equal(decide(rec({ paid_verification_latest: { delivered: false, failure_reason: "invalid_json", failure_kind: "any_buyer" } }), req()).action, "block");
+});
+test("rule 1 (0.2.0): a failure that depended on the request, or on the form of the answer, warns and allows", () => {
+  for (const fr of ["invalid_json", "error_payload", "paid_but_status_405", "paid_but_status_404", "paid_but_status_422"]) {
+    const d = decide(rec({ paid_verification_latest: { delivered: false, failure_reason: fr } }), req());
+    assert.equal(d.action, "allow", fr); assert.equal(d.warn, true); assert.equal(d.rule, "latest_purchase_failed_request");
+  }
+  const q = decide(rec({ paid_verification_latest: { delivered: false, failure_reason: "stale_data" } }), req());
+  assert.equal(q.rule, "latest_purchase_failed_quality"); assert.equal(q.action, "allow");
+  // no reason on the record: not evidence that every buyer fails
+  assert.equal(decide(rec({ paid_verification_latest: null, latest_purchase_delivered: false }), req()).warn, true);
+  // strict restores 0.1
+  assert.equal(decide(rec({ paid_verification_latest: { delivered: false, failure_reason: "invalid_json" } }), req(), { strict: true }).action, "block");
+  // the later rules still apply on top of the warning
+  assert.equal(decide(rec({ paid_verification_latest: { delivered: false, failure_reason: "invalid_json" } }), req({ payTo: "0x000000000000000000000000000000000000dEaD" })).rule, "payto_mismatch");
+  assert.equal(decide(rec({ status: "failing", paid_verification_latest: { delivered: false, failure_reason: "invalid_json" } }), req()).rule, "failing");
+});
+test("failureKind", () => {
+  assert.equal(failureKind("paid_but_status_502"), "any_buyer");
+  assert.equal(failureKind("schema_mismatch"), "quality");
+  assert.equal(failureKind("rejected_400_blind_request"), "request_dependent");
+  assert.equal(failureKind(null), "request_dependent");
 });
 test("rule 2: failing, delisted, unstable payTo", () => {
   assert.equal(decide(rec({ status: "failing" }), req()).rule, "failing");
@@ -48,7 +73,7 @@ test("several listings on one path: only the payment address is compared", () =>
   const shared = { ...rec({ paid_verification_latest: { delivered: false }, status: "failing" }), match_basis: "path", path_listings: 3 };
   assert.equal(decide(shared, req({ amount: "999999" })).rule, "path_shared");
   assert.equal(decide(shared, req({ payTo: "0x000000000000000000000000000000000000dEaD" })).rule, "payto_mismatch");
-  const single = { ...rec({ paid_verification_latest: { delivered: false } }), match_basis: "path", path_listings: 1 };
+  const single = { ...rec({ paid_verification_latest: { delivered: false, failure_reason: "paid_but_status_500" } }), match_basis: "path", path_listings: 1 };
   assert.equal(decide(single, req()).rule, "latest_purchase_failed");
 });
 test("lookup failure allows unless failClosed", () => {
@@ -83,7 +108,7 @@ test("check: sends origin+path only, caches, treats 404 as unknown, survives err
 });
 
 test("hook: aborts in enforce mode, never in observe mode, reports every decision", async () => {
-  const bad = rec({ paid_verification_latest: { delivered: false } });
+  const bad = rec({ paid_verification_latest: { delivered: false, failure_reason: "paid_but_status_500" } });
   const ctx = { paymentRequired: { resource: { url: "https://example.com/p" } }, selectedRequirements: req() };
   const seen = [];
   const r = await nohumansGuard({ fetch: fakeFetch(200, bad), cache: new Map(), onDecision: (d) => seen.push(d) })(ctx);
@@ -92,6 +117,10 @@ test("hook: aborts in enforce mode, never in observe mode, reports every decisio
   assert.equal(seen.length, 2);
   assert.equal(await nohumansGuard({ fetch: fakeFetch(200, rec()), cache: new Map(), onDecision: () => { throw new Error("x"); } })(ctx), undefined);
   assert.equal(await nohumansGuard({ fetch: fakeFetch(200, bad), cache: new Map() })({}), undefined, "no URL: nothing to check");
+  const soft = rec({ paid_verification_latest: { delivered: false, failure_reason: "invalid_json" } });
+  const warned = [];
+  assert.equal(await nohumansGuard({ fetch: fakeFetch(200, soft), cache: new Map(), onDecision: (d) => warned.push(d) })(ctx), undefined, "a request-dependent failure does not abort");
+  assert.equal(warned[0].warn, true);
 });
 
 test("reportOutcome signs the directory's message and posts it", async () => {

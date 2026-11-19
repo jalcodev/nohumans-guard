@@ -42,12 +42,14 @@ The directory's published pay rules, in order; the first that matches decides.
 | Rule | Blocks when |
 |---|---|
 | `delisted` | the endpoint was listed and later removed |
-| `latest_purchase_failed` | the directory's most recent real purchase settled and did not deliver |
+| `latest_purchase_failed` | the directory's most recent real purchase settled and nothing usable could come back, whatever was asked: a server error, a second 402 after payment, an empty answer, a dropped connection (`failure_kind: "any_buyer"`) |
 | `failing` | the endpoint is failing the directory's checks |
 | `payto_unstable` | its payment address keeps changing |
 | `payto_mismatch` | the 402 names a different payment address than the record, on the same network |
 | `price_above_record` | the 402 asks more than the recorded price (same network, asset and scheme) |
 | `payto_sentinel` | the payment address is a zero or burn address |
+
+A failed purchase of the other kinds is allowed with `warn: true` (since 0.2.0): `latest_purchase_failed_request` when the directory's own request was refused or answered in an undeclared form (missing parameters, wrong method, a web page or binary; your request may well work), and `latest_purchase_failed_quality` when an answer came back but not as promised (stale, or not the declared shape). `strict: true` blocks those too, as 0.1 did. Why: of the nine endpoints 0.1 would have blocked for other buyers over 30 days, one had a server error; the rest failed on the directory's request or on the form of the answer ([method](https://nohumans.directory/methodology#failure-kind-1119)).
 
 Everything else is allowed, with the reason attached: `ok`, `unknown` (never listed: most of the web), `unverified`, `path_shared` (several listings share the path; only the payment address was compared), `lookup_failed`.
 
@@ -58,6 +60,7 @@ It is dated evidence about an endpoint's behaviour, not a guarantee and not a sa
 ```js
 nohumansGuard({
   mode: "enforce",      // "observe" never blocks; it only calls onDecision
+  strict: false,        // true: block on any failed latest purchase (0.1 behaviour)
   unknown: "allow",     // "block" = pay only endpoints with a verified record
   priceSlack: 0,        // 0.2 allows the asked price to be up to 20% above the record
   failClosed: false,    // true = block when the directory cannot be reached

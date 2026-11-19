@@ -9,6 +9,8 @@ export interface GuardOptions {
   priceSlack?: number;
   /** Block when the directory cannot be reached. Default false: a lookup failure never stops a payment. */
   failClosed?: boolean;
+  /** Block on ANY failed latest purchase, as 0.1.x did. Default false: only failures any buyer would hit block (0.2.0). */
+  strict?: boolean;
   /** "strip" (default) sends only the endpoint's origin and path; "keep" sends the query string too (exact match). */
   query?: "strip" | "keep";
   /** Lookup timeout in milliseconds. Default 2500. */
@@ -25,11 +27,18 @@ export interface GuardOptions {
 
 export type Rule =
   | "ok" | "path_shared" | "unknown" | "unverified" | "lookup_failed" | "not_a_url" | "guard_error"
+  | "latest_purchase_failed_request" | "latest_purchase_failed_quality"
   | "delisted" | "latest_purchase_failed" | "failing" | "payto_unstable"
   | "payto_mismatch" | "price_above_record" | "payto_sentinel";
 
+export type FailureKind = "any_buyer" | "quality" | "request_dependent";
+
 export interface Decision {
   action: "allow" | "block";
+  /** true on an allowed payment the record has a concern about (0.2.0): a failed purchase that depended on the request or the form of the answer. */
+  warn?: boolean;
+  /** On a failed latest purchase: who it fails for. */
+  failure_kind?: FailureKind;
   rule: Rule;
   reason: string;
   /** The directory's listing id, when the endpoint is listed. */
@@ -45,6 +54,8 @@ export interface Requirements {
   amount?: string; maxAmountRequired?: string; resource?: string;
 }
 
+/** Who a failed purchase fails for, from its failure_reason (used when the record has no failure_kind). */
+export declare function failureKind(reason: string | null | undefined): FailureKind;
 /** The pay rules as a pure function over a /v1/resolve answer. */
 export declare function decide(resolved: unknown, requirements?: Requirements, opts?: GuardOptions): Decision;
 /** Look an endpoint URL up and apply the rules. Never throws on network errors. */

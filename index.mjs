@@ -14,7 +14,7 @@
  * payment, your wallet address or any header.
  */
 
-export const VERSION = "0.1.0";
+export const VERSION = "0.2.0";
 const DEFAULT_API = "https://api.nohumans.directory";
 
 /** CAIP-2 ids for the network names x402 v1 used, so "base" and "eip155:8453" compare equal. */
@@ -34,6 +34,24 @@ const sameAddress = (a, b, network) =>
   net(network).startsWith("eip155:") ? String(a).toLowerCase() === String(b).toLowerCase() : String(a) === String(b);
 
 const allow = (rule, reason, extra) => ({ action: "allow", rule, reason, ...extra });
+const warn = (rule, reason, extra) => ({ action: "allow", warn: true, rule, reason, ...extra });
+
+/**
+ * Who a failed purchase fails for (0.2.0; the directory publishes it as failure_kind since 2026-11-19,
+ * methodology #failure-kind-1119; this copy is used when an older record has none).
+ * any_buyer: nothing usable could come back whatever was asked: a server error, a second 402 after
+ * payment, an empty answer, a dropped connection, 202 with no job reference. Those block.
+ * quality: something came back but not as promised (stale, not the declared shape). request_dependent:
+ * the directory's own request was refused or answered in an undeclared form (missing parameters, wrong
+ * method, a web page or binary). Those can work for your request, so they warn and allow (strict: true blocks).
+ */
+export function failureKind(reason) {
+  const r = String(reason ?? "").split(";")[0].trim();
+  if (/^paid_but_status_(5\d\d|402)/.test(r) || r === "empty_body" || r.startsWith("paid_but_error_") || r === "accepted_no_result")
+    return "any_buyer";
+  if (r === "stale_data" || r === "schema_mismatch") return "quality";
+  return "request_dependent";
+}
 const block = (rule, reason, extra) => ({ action: "block", rule, reason, ...extra });
 
 /**
@@ -42,7 +60,7 @@ const block = (rule, reason, extra) => ({ action: "block", rule, reason, ...extr
  *
  * @param {object|null} resolved  JSON body of /v1/resolve ({match, detail|listing}), or null when the lookup failed
  * @param {object} [requirements] the selected x402 payment requirements ({network, asset, amount, payTo, scheme})
- * @param {object} [opts]         { unknown: "allow"|"block", priceSlack: number, failClosed: boolean }
+ * @param {object} [opts]         { unknown: "allow"|"block", priceSlack: number, failClosed: boolean, strict: boolean }
  */
 export function decide(resolved, requirements, opts = {}) {
   const unknownPolicy = opts.unknown === "block" ? block : allow;
@@ -72,10 +90,23 @@ export function decide(resolved, requirements, opts = {}) {
       { listing_id: null, record: null });
   }
 
-  // 1. Our latest purchase failed: real USDC settled and nothing usable came back.
-  if (d.paid_verification_latest?.delivered === false || d.latest_purchase_delivered === false)
-    return block("latest_purchase_failed",
-      "the directory's most recent real purchase of this endpoint settled and did not deliver", ref);
+  // 1. Our latest purchase failed. Blocks when the failure would hit any buyer (0.2.0); a failure that
+  //    depended on the directory's own request, or an answer that came back but not as promised, is
+  //    carried as a warning and checked against the rules below (strict: true restores the 0.1 block).
+  let failedWarn = null;
+  const pvl = d.paid_verification_latest;
+  if (pvl?.delivered === false || d.latest_purchase_delivered === false) {
+    const kind = pvl?.failure_kind ?? failureKind(pvl?.failure_reason);
+    const why = pvl?.failure_reason ? ` (${pvl.failure_reason})` : "";
+    if (kind === "any_buyer" || opts.strict)
+      return block("latest_purchase_failed",
+        `the directory's most recent real purchase of this endpoint settled and did not deliver${why}`, { ...ref, failure_kind: kind });
+    failedWarn = { rule: "latest_purchase_failed_" + (kind === "quality" ? "quality" : "request"),
+      reason: kind === "quality"
+        ? `the directory's most recent real purchase settled and the answer was not as promised${why}`
+        : `the directory's most recent real purchase settled and its request was not served${why}; this can depend on the request: send what the endpoint asks for`,
+      failure_kind: kind };
+  }
 
   // 2. Known bad.
   if (d.status === "failing")
@@ -104,6 +135,8 @@ export function decide(resolved, requirements, opts = {}) {
   }
   if (d.payto_sentinel === true)
     return block("payto_sentinel", "the payment address is a zero or burn address", ref);
+
+  if (failedWarn) return warn(failedWarn.rule, failedWarn.reason, { ...ref, failure_kind: failedWarn.failure_kind });
 
   // 5. No evidence either way.
   if (d.status !== "verified")
